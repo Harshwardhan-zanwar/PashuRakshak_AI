@@ -1,144 +1,116 @@
 """
 model_loader.py
 ===============
-Layer 1 — MobileNetV2 model loader and inference runner.
-Loads the .pth model once at startup and exposes a predict() method.
+Layer 1 — Keras model loader and inference runner.
+Loads the 'disease_model.keras' once at startup and exposes a predict() method.
 """
 
 import os
 import io
 import logging
-from typing import List, Tuple, Optional
+import numpy as np
+from typing import List, Tuple, Optional, Any
+from PIL import Image, ImageStat
 
-import torch
-import torch.nn as nn
-from torchvision import models, transforms
-from PIL import Image
+# Suppress TF logs
+os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
+import tensorflow as tf
 
 logger = logging.getLogger(__name__)
 
-# ── 38 PlantVillage class names (must match training order) ─────
+# ── 3 Cattle Disease class names ─────
 CLASS_NAMES: List[str] = [
-    "Apple___Apple_scab",
-    "Apple___Black_rot",
-    "Apple___Cedar_apple_rust",
-    "Apple___healthy",
-    "Blueberry___healthy",
-    "Cherry_(including_sour)___Powdery_mildew",
-    "Cherry_(including_sour)___healthy",
-    "Corn_(maize)___Cercospora_leaf_spot Gray_leaf_spot",
-    "Corn_(maize)___Common_rust_",
-    "Corn_(maize)___Northern_Leaf_Blight",
-    "Corn_(maize)___healthy",
-    "Grape___Black_rot",
-    "Grape___Esca_(Black_Measles)",
-    "Grape___Leaf_blight_(Isariopsis_Leaf_Spot)",
-    "Grape___healthy",
-    "Orange___Haunglongbing_(Citrus_greening)",
-    "Peach___Bacterial_spot",
-    "Peach___healthy",
-    "Pepper,_bell___Bacterial_spot",
-    "Pepper,_bell___healthy",
-    "Potato___Early_blight",
-    "Potato___Late_blight",
-    "Potato___healthy",
-    "Raspberry___healthy",
-    "Soybean___healthy",
-    "Squash___Powdery_mildew",
-    "Strawberry___Leaf_scorch",
-    "Strawberry___healthy",
-    "Tomato___Bacterial_spot",
-    "Tomato___Early_blight",
-    "Tomato___Late_blight",
-    "Tomato___Leaf_Mold",
-    "Tomato___Septoria_leaf_spot",
-    "Tomato___Spider_mites Two-spotted_spider_mite",
-    "Tomato___Target_Spot",
-    "Tomato___Tomato_Yellow_Leaf_Curl_Virus",
-    "Tomato___Tomato_mosaic_virus",
-    "Tomato___healthy",
+    "Anthrax",
+    "Foot_and_Mouth_Disease",
+    "Healthy_Cattle",
 ]
 
-# ── Image preprocessing transform ─────────────────────────────────
-TRANSFORM = transforms.Compose([
-    transforms.Resize((224, 224)),
-    transforms.ToTensor(),
-    transforms.Normalize(
-        mean=[0.485, 0.456, 0.406],
-        std=[0.229, 0.224, 0.225],
-    ),
-])
-
-
-class PlantDiseaseModel:
+class CattleDiseaseModel:
     """
     Singleton model loader.
-    Loads MobileNetV2 from .pth checkpoint and runs inference on image bytes.
+    Loads Keras model and runs inference.
     """
 
-    def __init__(self, model_path: str = "mobilenetv2_plant.pth"):
-        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        logger.info(f"🔧 Loading model on device: {self.device}")
-        self.model = self._load_model(model_path)
-        logger.info(f"✅ Model loaded: {model_path}")
+    def __init__(self, model_path: str = "disease_model.keras"):
+        # Search for model file
+        actual_path = model_path
+        if not os.path.exists(actual_path):
+            # Try looking in root from Model/online/
+            root_path = os.path.join(os.path.dirname(__file__), "..", "..", "disease_model.keras")
+            if os.path.exists(root_path):
+                actual_path = root_path
+        
+        logger.info(f"🔧 Loading Keras model from: {actual_path}")
+        try:
+            self.model = tf.keras.models.load_model(actual_path)
+            # Warmup
+            self.model.predict(np.zeros((1, 256, 256, 3)), verbose=0)
+            logger.info(f"✅ Model loaded successfully")
+        except Exception as e:
+            logger.error(f"❌ Failed to load model: {e}")
+            raise e
 
-    def _load_model(self, path: str) -> nn.Module:
-        model = models.mobilenet_v2(weights=None)
-        model.classifier[1] = nn.Sequential(
-            nn.Dropout(0.2),
-            nn.Linear(model.last_channel, len(CLASS_NAMES)),
-        )
-        state = torch.load(path, map_location=self.device)
-        model.load_state_dict(state)
-        model.to(self.device)
-        model.eval()
-        return model
+    def validate_image(self, image: Image.Image) -> Tuple[bool, str]:
+        """
+        Heuristic image quality validation.
+        Checks if the image is too dark or too light.
+        """
+        img = image.convert('RGB')
+        stat = ImageStat.Stat(img)
+        
+        # Darkness/Brightness check (0-255 scale)
+        brightness = stat.mean[0] * 0.299 + stat.mean[1] * 0.587 + stat.mean[2] * 0.114
+        if brightness < 40:
+            return False, "Image is too dark. Please provide a well-lit photo."
+        if brightness > 230:
+            return False, "Image is too bright. Please avoid direct glare."
+
+        return True, "OK"
 
     def predict(
         self,
         image_bytes: bytes,
         top_k: int = 3,
-    ) -> Tuple[str, float, List[dict]]:
+    ) -> Tuple[str, float, List[dict], str]:
         """
         Run inference on raw image bytes.
-
-        Returns
-        -------
-        disease_key   : str   — top predicted class key
-        confidence    : float — softmax probability (0–1)
-        top_k_results : list  — [{"rank", "disease_key", "confidence"}, ...]
         """
         image = Image.open(io.BytesIO(image_bytes)).convert("RGB")
-        tensor = TRANSFORM(image).unsqueeze(0).to(self.device)
+        
+        # Validate quality
+        is_valid, status_msg = self.validate_image(image)
 
-        with torch.no_grad():
-            output = self.model(tensor)
-            probs  = torch.softmax(output, dim=1)[0]
+        # Preprocess
+        img_resized = image.resize((256, 256))
+        img_array = np.array(img_resized) / 255.0
+        img_batch = np.expand_dims(img_array, axis=0)
 
+        # Inference
+        predictions = self.model.predict(img_batch, verbose=0)[0]
+        indices = np.argsort(predictions)[::-1]
+        
         k = min(top_k, len(CLASS_NAMES))
-        topk_probs, topk_indices = torch.topk(probs, k)
+        top_indices = indices[:k]
 
-        disease_key = CLASS_NAMES[topk_indices[0].item()]
-        confidence  = float(topk_probs[0].item())
+        disease_key = CLASS_NAMES[top_indices[0]]
+        confidence  = float(predictions[top_indices[0]])
 
         top_k_results = [
             {
                 "rank":        i + 1,
-                "disease_key": CLASS_NAMES[topk_indices[i].item()],
-                "confidence":  round(float(topk_probs[i].item()) * 100, 2),
+                "disease_key": CLASS_NAMES[top_indices[i]],
+                "confidence":  round(float(predictions[top_indices[i]]) * 100, 2),
             }
             for i in range(k)
         ]
 
-        return disease_key, confidence, top_k_results
-
+        return disease_key, confidence, top_k_results, status_msg
 
 # ── Singleton ─────────────────────────────────────────────────────
-_model_instance: Optional[PlantDiseaseModel] = None
+_model_instance: Optional[CattleDiseaseModel] = None
 
-def get_model(model_path: Optional[str] = None) -> PlantDiseaseModel:
+def get_model(model_path: Optional[str] = None) -> CattleDiseaseModel:
     global _model_instance
     if _model_instance is None:
-        path = model_path or os.getenv("MODEL_PATH", "mobilenetv2_plant.pth")
-        _model_instance = PlantDiseaseModel(path)
+        _model_instance = CattleDiseaseModel(model_path or "disease_model.keras")
     return _model_instance
