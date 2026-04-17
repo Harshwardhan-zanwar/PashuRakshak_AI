@@ -55,3 +55,8 @@ Thumbs.db
 .idea/
 *.swp
 *.swo
+
+# Large Files (Exceeds GitHub 100MB limit)
+disease_model.keras
+Model/online/disease_model.keras
+
