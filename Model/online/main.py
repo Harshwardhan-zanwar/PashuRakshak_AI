@@ -8,6 +8,10 @@ from fastapi import FastAPI, File, UploadFile, HTTPException, Form
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
+# Import Local Logic
+from model_loader import get_model
+from intelligence_engine import IntelligenceEngine
+
 # Import Supabase client logic
 try:
     from db_client import get_db
@@ -19,19 +23,19 @@ load_dotenv()
 
 # Configure Logging
 logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)-8s | %(name)s | %(message)s")
-logger = logging.getLogger("AgriSense-Backend")
+logger = logging.getLogger("PashuRakshak-Backend")
 
 # Initialize FastAPI
 app = FastAPI(
-    title="AgriSense API Skeleton",
-    description="Backend skeleton for AgriSense Website. Includes Mock ML and Supabase integration.",
+    title="Pashu Rakshak AI API",
+    description="Cattle Disease Detection and Diagnostic Engine.",
     version="1.0.0"
 )
 
-# CORS Configuration - Critical for Next.js Frontend
+# CORS Configuration
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # In production, specify your frontend URL
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -39,6 +43,20 @@ app.add_middleware(
 
 # API Prefix
 API_PREFIX = "/api/v1"
+
+# Initialize global instances lazily or on startup
+model = None
+engine = None
+
+@app.on_event("startup")
+async def startup_event():
+    global model, engine
+    try:
+        model = get_model()
+        engine = IntelligenceEngine(protocols_path="disease_protocols.json")
+        logger.info("✅ All systems initialized successfully")
+    except Exception as e:
+        logger.error(f"❌ Initialization Error: {e}")
 
 @app.get("/")
 @app.get("/health")
@@ -48,17 +66,8 @@ async def health():
     return {
         "status": "ok",
         "timestamp": datetime.now(timezone.utc).isoformat(),
-        "database_connected": get_db().is_connected if get_db else False
-    }
-
-@app.get(f"{API_PREFIX}/endpoints")
-async def endpoints():
-    """List available endpoints."""
-    return {
-        "endpoints": [
-            {"path": f"{API_PREFIX}/health", "method": "GET", "desc": "Health check"},
-            {"path": f"{API_PREFIX}/predict", "method": "POST", "desc": "Crop disease prediction (Mock Mode)"},
-        ]
+        "model_loaded": model is not None,
+        "engine_loaded": engine is not None
     }
 
 @app.post(f"{API_PREFIX}/predict")
@@ -66,44 +75,50 @@ async def predict(
     file: UploadFile = File(...),
     location_lat: Optional[float] = Form(None),
     location_lon: Optional[float] = Form(None),
-    crop_area: float = Form(1.0)
+    crop_area: float = Form(1.0),
+    market_price: float = Form(1500.0)
 ):
     """
-    Mock Prediction Endpoint.
-    This takes an image and returns a generic 'Mock Result' so the frontend can be developed.
+    Cattle Disease Prediction Endpoint.
     """
-    logger.info(f"Received prediction request for file: {file.filename}")
+    if not model or not engine:
+        raise HTTPException(status_code=503, detail="Model or Intelligence Engine not loaded.")
 
-    # --- MOCK ML LOGIC ---
-    # This is where your teammate will plug in the actual ML model later.
-    mock_result = {
-        "disease": "Tomato Late Blight",
-        "disease_key": "tomato_late_blight",
-        "confidence_raw": 0.985,
-        "is_positive": True,
-        "severity_level": "MODERATE",
-        "disease_type": "Fungal",
-        "yield_loss_pct": 15.5,
-        "economic_loss_rs": 4500.0,
-        "timestamp": datetime.now(timezone.utc).isoformat(),
-        "location": {
-            "lat": location_lat,
-            "lon": location_lon
-        },
-        "recommendations": [
-            "Apply Copper-based fungicides.",
-            "Remove and destroy infected leaves.",
-            "Improve air circulation between plants."
-        ]
-    }
+    try:
+        logger.info(f"Received prediction request for file: {file.filename}")
+        image_bytes = await file.read()
+        
+        # 1. Model Inference
+        disease_key, confidence, top_k, status_msg = model.predict(image_bytes)
+        
+        # 2. Intelligence Layer
+        location = (location_lat, location_lon) if location_lat and location_lon else None
+        
+        result = engine.analyze(
+            disease_key=disease_key,
+            confidence=confidence,
+            location=location,
+            crop_area_acres=crop_area,
+            market_price_rs_per_quintal=market_price,
+            top_k_predictions=top_k
+        )
+        
+        # 3. Add quality validation message
+        result["quality_msg"] = status_msg
+        
+        # Store in DB if available
+        if get_db:
+            try:
+                db = get_db()
+                db.insert_scan(result)
+            except Exception as db_err:
+                logger.warning(f"DB Error: {db_err}")
 
-    # --- SUPABASE INTEGRATION ---
-    # Save the result to the database if configured
-    if get_db:
-        db = get_db()
-        db.insert_scan(mock_result)
+        return JSONResponse(content=result)
 
-    return JSONResponse(content=mock_result)
+    except Exception as e:
+        logger.error(f"Prediction Error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 if __name__ == "__main__":
     import uvicorn
