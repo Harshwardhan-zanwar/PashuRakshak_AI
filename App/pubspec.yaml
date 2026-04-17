@@ -38,15 +38,12 @@ dependencies:
   http: ^1.6.0
   shared_preferences: ^2.5.5
   connectivity_plus: ^7.1.1
-<<<<<<< HEAD
-  geolocator: ^14.0.2
-  fl_chart: ^1.2.0
-=======
   camera: ^0.11.0+1
   image_picker: ^1.1.2
   path_provider: ^2.1.5
   path: ^1.9.0
->>>>>>> bb49c14801812d46b6185caf695885edb0065ad6
+  geolocator: ^14.0.2
+  fl_chart: ^1.2.0
 
 dev_dependencies:
   flutter_test:
