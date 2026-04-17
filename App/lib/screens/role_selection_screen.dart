@@ -20,7 +20,7 @@ class _RoleSelectionScreenState extends State<RoleSelectionScreen> {
       body: Container(
         decoration: const BoxDecoration(
           image: DecorationImage(
-            image: NetworkImage('https://images.unsplash.com/photo-1523348837708-15d4a09cfac2?q=80&w=1200&auto=format&fit=crop'), // Farm background placeholder
+            image: NetworkImage('https://images.unsplash.com/photo-1500595046743-cd271d694d30?q=80&w=1200'), // High-res Lush Farm with Cattle
             fit: BoxFit.cover,
             colorFilter: ColorFilter.mode(Colors.black54, BlendMode.darken),
           ),

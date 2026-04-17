@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
-import 'disease_scanner_screen.dart';
+
+// Note: DashboardScreen is a legacy file. Primary navigation is in MainShellScreen.
 
 class DashboardScreen extends StatelessWidget {
   const DashboardScreen({super.key});
@@ -89,9 +90,8 @@ class DashboardScreen extends StatelessWidget {
                 icon: Icons.qr_code_scanner_rounded,
                 color: Colors.greenAccent.shade400,
                 onTap: () {
-                  Navigator.push(
-                    context,
-                    MaterialPageRoute(builder: (context) => const DiseaseScannerScreen()),
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(content: Text('Scanner is available in the Bottom Navigation Bar.'))
                   );
                 },
               ),
